@@ -1,0 +1,122 @@
+import PySimpleGUI as sg
+import threading
+import time
+
+def countdown_timer(window, initial_time, stop_event, key_prefix):
+    """Manage the countdown and update the GUI."""
+    current_time = initial_time
+    while current_time > 0 and not stop_event.is_set():
+        # Format the remaining time
+        mins, secs = divmod(current_time, 60)
+        time_format = f'{mins:02d}:{secs:02d}'
+        # Send the time format to the main thread to update the countdown display
+        window.write_event_value(f'-UPDATE_{key_prefix}_COUNTDOWN-', time_format)
+        # Wait for one second
+        time.sleep(1)
+        current_time -= 1
+
+    if current_time <= 0 and not stop_event.is_set():
+        # Time to remind
+        window.write_event_value(f'-TIME_TO_{key_prefix}_REMIND-', None)
+
+def manage_reminders(window, reminder_interval, reminder_type, stop_event, paused_time, key_prefix):
+    """Thread function to manage reminders."""
+    # Calculate the correct starting time
+    time_to_count = paused_time if paused_time else reminder_interval
+
+    while not stop_event.is_set():
+        # Run the countdown
+        countdown_timer(window, time_to_count, stop_event, key_prefix)
+
+        # Check if we need to send a reminder
+        if not stop_event.is_set():
+            # Send the appropriate reminder
+            window.write_event_value(f'-REMINDER_{key_prefix}-', f'Time to {reminder_type}!')
+            # Reset the time to count for the next cycle
+            time_to_count = reminder_interval
+
+# Define the layout of the window
+layout = [
+    [sg.Text('Next drink reminder in:'), sg.Text('00:30', key='-DRINK_COUNTDOWN-', font=('Helvetica', 25))],
+    [sg.Text('Next move reminder in:'), sg.Text('00:30', key='-MOVE_COUNTDOWN-', font=('Helvetica', 25))],
+    [sg.Text('Drink Interval (minutes):'), sg.Combo([15, 30, 45, 60], default_value=30, key='-DRINK_INTERVAL-')],
+    [sg.Text('Move Interval (minutes):'), sg.Combo([15, 30, 45, 60], default_value=60, key='-MOVE_INTERVAL-')],
+    [sg.Button('Start Drink'), sg.Button('Pause Drink'), sg.Button('Reset Drink')],
+    [sg.Button('Start Move'), sg.Button('Pause Move'), sg.Button('Reset Move')]
+]
+
+# Create the window
+window = sg.Window('Hydration and Activity Reminder', layout)
+
+# Events to stop the threads
+stop_drink_event = threading.Event()
+stop_move_event = threading.Event()
+
+# Threads
+drink_thread = None
+move_thread = None
+
+# Paused times
+paused_drink_time = 0
+paused_move_time = 0
+
+while True:
+    event, values = window.read(timeout=100)
+
+    if event == sg.WINDOW_CLOSED:
+        break
+
+    # Handle drink reminders
+    elif event.startswith('Start Drink'):
+        if drink_thread is None or not drink_thread.is_alive():
+            stop_drink_event.clear()
+            drink_interval = int(values['-DRINK_INTERVAL-']) * 60
+            drink_thread = threading.Thread(target=manage_reminders, args=(window, drink_interval, 'drink', stop_drink_event, paused_drink_time, 'DRINK'), daemon=True)
+            drink_thread.start()
+    elif event.startswith('Pause Drink'):
+        if not stop_drink_event.is_set():
+            stop_drink_event.set()
+            mins, secs = map(int, window['-DRINK_COUNTDOWN-'].get().split(':'))
+            paused_drink_time = mins * 60 + secs
+    elif event.startswith('Reset Drink'):
+        if not stop_drink_event.is_set():
+            stop_drink_event.set()
+        window['-DRINK_COUNTDOWN-'].update('00:00')
+        paused_drink_time = 0
+
+    # Handle move reminders
+    elif event.startswith('Start Move'):
+        if move_thread is None or not move_thread.is_alive():
+            stop_move_event.clear()
+            move_interval = int(values['-MOVE_INTERVAL-']) * 60
+            move_thread = threading.Thread(target=manage_reminders, args=(window, move_interval, 'move', stop_move_event, paused_move_time, 'MOVE'), daemon=True)
+            move_thread.start()
+    elif event.startswith('Pause Move'):
+        if not stop_move_event.is_set():
+            stop_move_event.set()
+            mins, secs = map(int, window['-MOVE_COUNTDOWN-'].get().split(':'))
+            paused_move_time = mins * 60 + secs
+    elif event.startswith('Reset Move'):
+        if not stop_move_event.is_set():
+            stop_move_event.set()
+        window['-MOVE_COUNTDOWN-'].update('00:00')
+        paused_move_time = 0
+
+    # Update countdowns
+    elif event == '-UPDATE_DRINK_COUNTDOWN-':
+        window['-DRINK_COUNTDOWN-'].update(values[event])
+    elif event == '-UPDATE_MOVE_COUNTDOWN-':
+        window['-MOVE_COUNTDOWN-'].update(values[event])
+
+    # Show reminders
+    elif event == '-REMINDER_DRINK-':
+        sg.popup(values[event], keep_on_top=True)
+        paused_drink_time = int(values['-DRINK_INTERVAL-']) * 60
+        window['-DRINK_COUNTDOWN-'].update(f'{int(values["-DRINK_INTERVAL-"]):02d}:00')
+    elif event == '-REMINDER_MOVE-':
+        sg.popup(values[event], keep_on_top=True)
+        paused_move_time = int(values['-MOVE_INTERVAL-']) * 60
+        window['-MOVE_COUNTDOWN-'].update(f'{int(values["-MOVE_INTERVAL-"]):02d}:00')
+
+# Close the window
+window.close()

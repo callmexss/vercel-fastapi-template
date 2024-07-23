@@ -1,0 +1,87 @@
+import threading
+import keyboard
+import PySimpleGUI as sg
+import json
+import os
+
+# 缩写保存文件路径
+ABBR_FILE = "abbreviations.json"
+
+# 加载缩写字典
+def load_abbreviations():
+    if os.path.exists(ABBR_FILE):
+        with open(ABBR_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+# 保存缩写字典
+def save_abbreviations(abbr_dict):
+    with open(ABBR_FILE, "w", encoding="utf-8") as f:
+        json.dump(abbr_dict, f, ensure_ascii=False, indent=4)
+
+# 初始化缩写字典
+abbreviations = load_abbreviations()
+
+# 事件标志，用于通知缩写更新
+update_event = threading.Event()
+
+# GUI 界面函数
+def abbreviation_gui():
+    layout = [
+        [sg.Text("缩写"), sg.InputText(key="-ABBR-"), sg.Text("完整命令"), sg.InputText(key="-CMD-")],
+        [sg.Button("添加"), sg.Button("删除"), sg.Button("清空输入"), sg.Button("退出")],
+        [sg.Listbox(values=list(abbreviations.items()), size=(50, 10), key="-LIST-")]
+    ]
+    window = sg.Window("缩写管理器", layout)
+
+    while True:
+        event, values = window.read()
+        if event == sg.WINDOW_CLOSED or event == "退出":
+            break
+        elif event == "添加":
+            abbr = values["-ABBR-"].strip()
+            cmd = values["-CMD-"].strip()
+            if abbr and cmd:
+                abbreviations[abbr] = cmd
+                window["-LIST-"].update(values=list(abbreviations.items()))
+                save_abbreviations(abbreviations)
+                update_event.set()  # 通知监听线程更新缩写
+        elif event == "删除":
+            selected = values["-LIST-"]
+            if selected:
+                abbr = selected[0][0]
+                if abbr in abbreviations:
+                    del abbreviations[abbr]
+                    window["-LIST-"].update(values=list(abbreviations.items()))
+                    save_abbreviations(abbreviations)
+                    update_event.set()  # 通知监听线程更新缩写
+        elif event == "清空输入":
+            # 清空输入框内容
+            window["-ABBR-"].update('')
+            window["-CMD-"].update('')
+
+    window.close()
+
+# 键盘监听函数
+def monitor_keyboard():
+    while True:
+        # 清除所有已注册的缩写
+        keyboard.unhook_all()
+
+        # 重新注册缩写
+        for abbr, cmd in abbreviations.items():
+            keyboard.add_abbreviation(abbr, cmd)
+
+        # 等待更新事件
+        update_event.wait()
+        update_event.clear()
+
+# 使用多线程运行 GUI 和键盘监听
+if __name__ == "__main__":
+    gui_thread = threading.Thread(target=abbreviation_gui, daemon=True)
+    keyboard_thread = threading.Thread(target=monitor_keyboard, daemon=True)
+
+    gui_thread.start()
+    keyboard_thread.start()
+
+    gui_thread.join()
